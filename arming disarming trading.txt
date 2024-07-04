@@ -1,0 +1,53 @@
+import asyncio
+import nest_asyncio
+
+# Global variables
+resampled_data = {}
+indicator_data = {}
+trading_active = False
+
+async def resample_ticks():
+    global resampled_data, indicator_data
+    while True:
+        resampled_data = (resample function)
+        for token in resampled_data:
+            indicator_data[token] = calculate_indicators(token, resampled_data[token])
+        await asyncio.sleep(1)
+
+async def trading_logic():
+    global indicator_data, trading_active
+    while True:
+        if trading_active:
+            # Check and process the indicator_data here
+            # Implement your trading logic here
+            print("Trading logic running")  # Placeholder for actual trading logic
+        else:
+            print("Trading logic paused")
+        await asyncio.sleep(1)
+
+async def main():
+    resample_task = asyncio.create_task(resample_ticks())
+    trading_task = asyncio.create_task(trading_logic())
+    await asyncio.gather(resample_task, trading_task)
+
+def set_trading_active(value):
+    global trading_active
+    trading_active = value
+    print(f"Trading active set to {trading_active}")
+
+# Get the current event loop
+loop = asyncio.get_event_loop()
+
+if loop.is_running():
+    nest_asyncio.apply()
+    asyncio.create_task(main())
+else:
+    loop.run_until_complete(main())
+
+# Example: Dynamically change the trading_active flag
+set_trading_active(True)
+asyncio.run(asyncio.sleep(5))  # Simulate some delay
+set_trading_active(False)
+asyncio.run(asyncio.sleep(5))  # Simulate some delay
+set_trading_active(True)
+asyncio.run(asyncio.sleep(5))  # Simulate some delay
