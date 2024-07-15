@@ -51,3 +51,363 @@ set_trading_active(False)
 asyncio.run(asyncio.sleep(5))  # Simulate some delay
 set_trading_active(True)
 asyncio.run(asyncio.sleep(5))  # Simulate some delay
+
+-------------------------------------import asyncio
+from collections import deque
+from typing import Dict, Deque
+import pandas as pd
+import numpy as np
+from asyncio import Queue
+
+# Global variables
+current_positions: Dict[str, str] = {}
+resampled_data: Dict[str, pd.DataFrame] = {}
+tick_queues: Dict[str, Queue] = {}
+ema_length = 20  # Adjust as needed
+
+class TokenData:
+    def __init__(self, window_size: int = 100):
+        self.ticks: Deque[float] = deque(maxlen=window_size)
+        self.ema_short: float = np.nan
+        self.ema_long: float = np.nan
+        self.alma: float = np.nan
+
+async def websocket_tick_handler(token: str, price: float):
+    await tick_queues[token].put(price)
+
+async def process_ticks(token: str):
+    token_data = TokenData()
+    while True:
+        price = await tick_queues[token].get()
+        token_data.ticks.append(price)
+        
+        # Update EMAs and ALMA
+        token_data.ema_short = calculate_ema(token_data.ticks, 10)  # Adjust periods as needed
+        token_data.ema_long = calculate_ema(token_data.ticks, 20)
+        token_data.alma = calculate_alma(token_data.ticks, 10, 0.85, 6)  # Adjust parameters as needed
+        
+        # Check for trading signals
+        await check_trading_signals(token, token_data)
+
+async def check_trading_signals(token: str, data: TokenData):
+    if np.isnan(data.ema_short) or np.isnan(data.ema_long) or np.isnan(data.alma):
+        return
+
+    current_position = current_positions.get(token)
+
+    # Check for exit signals first
+    if current_position == 'long' and data.ema_short < data.ema_long:
+        await execute_trade(token, 'LONG_EXIT', data)
+    elif current_position == 'short' and data.ema_short > data.ema_long:
+        await execute_trade(token, 'SHORT_EXIT', data)
+    # Then check for entry signals
+    elif current_position is None:
+        if data.ema_short > data.ema_long >= data.alma:
+            await execute_trade(token, 'LONG_ENTRY', data)
+        elif data.ema_short < data.ema_long <= data.alma:
+            await execute_trade(token, 'SHORT_ENTRY', data)
+
+async def execute_trade(token: str, action: str, data: TokenData):
+    current_price = data.ticks[-1]
+    timestamp = pd.Timestamp.now()
+    
+    print(f"{action} Signal for {token} at {timestamp}, Price: {current_price}")
+    log_trade(timestamp, token, action, current_price, data.ema_short, data.ema_long, data.alma)
+    
+    if action.endswith('ENTRY'):
+        current_positions[token] = action.split('_')[0].lower()
+    else:
+        current_positions[token] = None
+
+def log_trade(timestamp, token, action, price, ema_short, ema_long, alma):
+    with open("trade_log.csv", "a") as log_file:
+        log_file.write(f"{timestamp},{token},{action},{price},{ema_short},{ema_long},{alma}\n")
+
+def calculate_ema(data: Deque[float], period: int) -> float:
+    # Implement EMA calculation here
+    pass
+
+def calculate_alma(data: Deque[float], window: int, offset: float, sigma: float) -> float:
+    # Implement ALMA calculation here
+    pass
+
+async def main():
+    # Initialize tick queues for each token
+    for token in ['TOKEN1', 'TOKEN2', 'TOKEN3']:  # Add your tokens here
+        tick_queues[token] = Queue()
+        asyncio.create_task(process_ticks(token))
+    
+    # Here you would set up your websocket connection and bind it to websocket_tick_handler
+    # For example:
+    # await websocket.connect(uri, on_message=lambda msg: asyncio.create_task(websocket_tick_handler(msg['token'], msg['price'])))
+    
+    # Keep the main coroutine running
+    while True:
+        await asyncio.sleep(1)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
+
+
+import pandas as pd
+import pandas_ta as ta
+import pyotp
+from datetime import datetime, timedelta
+import time
+import csv
+import asyncio
+import nest_asyncio
+import logging
+import websocket as ws_client
+import xarray as xr
+import threading
+
+from NorenRestApiPy.NorenApi import NorenApi
+
+class ShoonyaApiPy(NorenApi):
+    def __init__(self):
+        NorenApi.__init__(self, host='https://api.shoonya.com/NorenWClientTP/', websocket='wss://api.shoonya.com/NorenWSTP/')        
+        global api
+        api = self
+
+import logging
+#logging.basicConfig(level=logging.DEBUG)
+logging.getLogger('websocket').setLevel(logging.INFO)
+
+usercred = pd.read_excel("usercred.xlsx")
+user    = usercred.iloc[0,0]
+pwd     = usercred.iloc[0,1]
+vc      = usercred.iloc[0,2]
+app_key = usercred.iloc[0,3]
+imei    = usercred.iloc[0,4]
+qr = usercred.iloc[0,5]
+factor2 = pyotp.TOTP(qr).now()
+
+api = ShoonyaApiPy()
+ret = api.login(userid=user, password=pwd, twoFA=factor2, vendor_code=vc, api_secret=app_key, imei=imei)
+
+async def trading_logic():
+    global last_processed_candle, resampled_data
+    while trading_active:
+        current_time = pd.Timestamp.now()
+        
+        for token, data in resampled_data.items():
+            if not data.empty:
+                last_candle_start = data.index[-1]
+                
+                # Use a fixed 15-second interval if resample_freq is None
+                resample_freq = data.index.freq or pd.Timedelta(seconds=15)
+                
+                current_candle_end = last_candle_start + resample_freq
+                
+                if (current_time >= current_candle_end and
+                    (token not in last_processed_candle or current_candle_end > last_processed_candle[token])):
+                    
+                    # Only process if this is truly a new candle
+                    if token not in last_processed_candle or current_candle_end > last_processed_candle[token] + resample_freq / 2:
+                        last_processed_candle[token] = current_candle_end
+                        
+                        
+                        #print(f"Triggering entry logic for {token} at {current_time}")
+                        #print(f"Current candle end: {current_candle_end}")
+                        process_token_data(token)
+
+        await asyncio.sleep(0.01)  # Check every 10ms
+
+
+def process_token_data(token):
+    df = resampled_data[token]
+    print(len(df), ema_length)
+
+    if len(df) > ema_length:
+        # Extract the latest and previous EMA values
+        EMA_short_latest = df['EMA_short'].iloc[-1]
+        EMA_long_latest = df['EMA_long'].iloc[-1]
+        ALMA_latest = df['ALMA'].iloc[-1]
+        EMA_short_previous = df['EMA_short'].iloc[-2]
+        EMA_long_previous = df['EMA_long'].iloc[-2]
+
+        timestamp = df.index[-1]
+
+        current_position = current_positions.get(token)
+        action_taken = False
+
+        # First, check for exit signals
+        if current_position == 'long' and (EMA_short_latest < EMA_long_latest):
+            log_trade(timestamp, token, "LONG_EXIT", EMA_short_latest, EMA_long_latest, ALMA_latest, EMA_short_previous, EMA_long_previous)
+            print(f"Long Exit Signal for {token} at {df.index[-1]} at {pd.Timestamp.now()}")
+            print(EMA_short_latest, EMA_long_latest, EMA_short_previous, EMA_long_previous, ALMA_latest)
+            current_positions[token] = None
+            action_taken = True
+
+        elif current_position == 'short' and (EMA_short_latest > EMA_long_latest):
+            log_trade(timestamp, token, "SHORT_EXIT", EMA_short_latest, EMA_long_latest, ALMA_latest, EMA_short_previous, EMA_long_previous)
+            print(f"Short Exit Signal for {token} at {df.index[-1]} at {pd.Timestamp.now()}")
+            print(EMA_short_latest, EMA_long_latest, EMA_short_previous, EMA_long_previous, ALMA_latest)
+            current_positions[token] = None
+            action_taken = True
+
+        # Then, check for entry signals if we've just exited a position or if we're not in a position
+        if action_taken or current_positions.get(token) is None:
+            if (EMA_short_latest > EMA_long_latest >= ALMA_latest) and (EMA_short_previous <= EMA_long_previous):
+                log_trade(timestamp, token, "LONG_ENTRY", EMA_short_latest, EMA_long_latest, ALMA_latest, EMA_short_previous, EMA_long_previous)
+                print(f"Long Entry Signal for {token} at {df.index[-1]} at {pd.Timestamp.now()}")
+                print(EMA_short_latest, EMA_long_latest, EMA_short_previous, EMA_long_previous, ALMA_latest)
+                current_positions[token] = 'long'
+
+            elif (EMA_short_latest < EMA_long_latest <= ALMA_latest) and (EMA_short_previous >= EMA_long_previous):
+                log_trade(timestamp, token, "SHORT_ENTRY", EMA_short_latest, EMA_long_latest, ALMA_latest, EMA_short_previous, EMA_long_previous)
+                print(f"Short Entry Signal for {token} at {df.index[-1]} at {pd.Timestamp.now()}")
+                print(EMA_short_latest, EMA_long_latest, EMA_short_previous, EMA_long_previous, ALMA_latest)
+                current_positions[token] = 'short'
+
+def log_trade(timestamp, token, action, EMA_short_latest, EMA_long_latest, ALMA_latest, EMA_short_previous, EMA_long_previous):
+    with open("trade_log.csv", "a") as log_file:
+         log_file.write(f"{timestamp},{token},{action},{EMA_short_latest},{EMA_long_latest},{ALMA_latest},{EMA_short_previous},{EMA_long_previous}\n")     
+
+import asyncio
+import threading
+from datetime import datetime
+import pandas as pd
+import nest_asyncio
+
+ema_length = 30
+# Constants (you may want to adjust these values)
+last_processed_candle = {}
+initial_sl_points = 10
+move_sl_points = 5
+profit_booking_points = 20
+
+trading_active = True
+feed_opened = False
+feedJson = {}
+resample_frequency = "15s"
+resampling_lock = threading.Lock()
+last_resample_time = {}
+resampled_data = {}
+current_positions = {}
+
+
+if 'resampled_data' not in globals():
+    resampled_data = {}
+if 'last_resample_time' not in globals():
+    last_resample_time = {}
+
+def event_handler_feed_update(tick_data):
+    
+    try:
+        if 'lp' in tick_data and 'tk' in tick_data:
+            timest = datetime.fromtimestamp(int(tick_data['ft'])).isoformat()
+            token = tick_data['tk']
+
+            with resampling_lock:
+                if token not in feedJson:
+                    feedJson[token] = []
+                    last_resample_time[token] = timest
+
+                feedJson[token].append({'ltp': float(tick_data['lp']), 'tt': timest})
+    except (KeyError, ValueError) as e:
+        print(f"Error processing tick data: {e}")
+
+async def resample_ticks():
+    
+    while True:
+        if not feedJson:
+            await asyncio.sleep(1)
+            continue
+
+        with resampling_lock:
+            for token, ticks in feedJson.items():
+                try:
+                    if ticks:
+                        # Create a DataFrame with the new ticks
+                        df_new = pd.DataFrame(ticks)
+                        df_new["tt"] = pd.to_datetime(df_new["tt"])
+                        df_new.set_index("tt", inplace=True)
+
+                        # Determine the current resample interval
+                        current_resample_interval = df_new.index.max().floor(resample_frequency)
+
+                        # Initialize or update the resampled DataFrame
+                        if token not in resampled_data:
+                            # Initialize the DataFrame with the first resample
+                            df_resampled = df_new['ltp'].resample(resample_frequency).ohlc()
+                            resampled_data[token] = df_resampled
+                            last_resample_time[token] = df_resampled.index.max()
+                        else:
+                            # Resample the new ticks
+                            df_resampled = df_new['ltp'].resample(resample_frequency).ohlc()
+
+                            # Update the existing resampled DataFrame with new data
+                            for idx, row in df_resampled.iterrows():
+                                if idx in resampled_data[token].index:
+                                    resampled_data[token].loc[idx, 'high'] = max(resampled_data[token].loc[idx, 'high'], row['high'])
+                                    resampled_data[token].loc[idx, 'low'] = min(resampled_data[token].loc[idx, 'low'], row['low'])
+                                    resampled_data[token].loc[idx, 'close'] = row['close']
+                                else:
+                                    resampled_data[token].loc[idx] = row
+
+                            # Update the last resampled time
+                            last_resample_time[token] = df_resampled.index.max()
+
+                        # Calculate indicators for the updated resampled data
+                        # Example: Calculate EMA
+                        resampled_data[token]['EMA_short'] = ta.ema(resampled_data[token]['close'], length=3)
+                        resampled_data[token]['EMA_long'] = ta.ema(resampled_data[token]['close'], length=10)
+                        resampled_data[token]['ALMA'] = ta.alma(resampled_data[token]['close'], length=20, sigma=6, distribution_offset=0.75)
+                        #resampled_data[token]['JMA1'] = ta.jma(resampled_data[token]['close'], length=50, phase=0, offset=0)
+                    feedJson[token] = []
+
+                except Exception as e:
+                    if isinstance(e, KeyError) and e.args[0] == 'tt':
+                        print(f"Market likely closed for token {token}")
+                    else:
+                        print(f"Error resampling data for token {token}: {e}")
+
+        await asyncio.sleep(1)
+        
+
+def event_handler_order_update(tick_data):
+    print(f"Order update {tick_data}")
+
+def open_callback():
+    global feed_opened
+    feed_opened = True
+
+# Assuming `api` is defined and starts the WebSocket connection
+async def connect_and_subscribe():
+    global feed_opened
+    api.start_websocket(
+        order_update_callback=event_handler_order_update,
+        subscribe_callback=event_handler_feed_update,
+        socket_open_callback=open_callback
+    )
+    while not feed_opened:
+        await asyncio.sleep(1)  # Wait for initial connection
+
+    api.subscribe(['MCX|426308'])
+
+async def main():
+   
+    resample_task = asyncio.create_task(resample_ticks())
+    trading_task = asyncio.create_task(trading_logic())
+    connect_task = asyncio.create_task(connect_and_subscribe())
+
+    await asyncio.gather(connect_task, resample_task, trading_task)
+
+def set_trading_active(value):
+    global trading_active
+    trading_active = value
+    #print(f"Trading active set to {trading_active}")
+
+# Get the current event loop
+loop = asyncio.get_event_loop()
+
+if loop.is_running():
+    nest_asyncio.apply()
+    asyncio.create_task(main())
+else:
+    loop.run_until_complete(main())
