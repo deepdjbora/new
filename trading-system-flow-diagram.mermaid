@@ -1,0 +1,40 @@
+graph TD
+    A[Start] --> B[Initialize ShoonyaApiPy]
+    B --> C[Login to API]
+    C --> D[Define Global Variables]
+    D --> E[Define Event Handlers]
+    E --> F[Define Async Functions]
+    F --> G[Main Function]
+    
+    G --> H[Create Tasks]
+    H --> I[Connect and Subscribe]
+    H --> J[Resample Ticks]
+    H --> K[Trading Logic]
+    H --> L[Update ATM Symbols]
+    
+    I --> M[WebSocket Connection]
+    M --> N{New Tick Data?}
+    N -->|Yes| O[Process Tick Data]
+    O --> P[Update feedJson]
+    P --> N
+    N -->|No| M
+    
+    J --> Q[Resample Ticks]
+    Q --> R[Calculate Indicators]
+    R --> S[Update resampled_data]
+    S --> Q
+    
+    K --> T[Check for Signals]
+    T --> U{Exit Signal?}
+    U -->|Yes| V[Exit Position]
+    U -->|No| W{Entry Signal?}
+    W -->|Yes| X[Enter Position]
+    W -->|No| T
+    
+    L --> Y[Find ATM Strike]
+    Y --> Z[Update Trading Symbols]
+    Z --> L
+    
+    V --> AA[Log Trade]
+    X --> AA
+    AA --> T
