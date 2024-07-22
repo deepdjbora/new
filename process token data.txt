@@ -1,0 +1,76 @@
+import pandas as pd
+
+# Assuming the following variables are defined elsewhere in the code:
+# resampled_data, ema_length, current_positions, extra_feedJson, set
+
+# Function to log trades
+def log_trade(timestamp, token, action, price):
+    with open("trade_log.csv", "a") as log_file:
+        log_file.write(f"{timestamp},{token},{action},{price}\n")
+
+# Dictionary to keep track of entry instruments
+entry_instruments = {}
+
+def get_latest_price(entry_instrument):
+    if entry_instrument in extra_feedJson:
+        # Assuming the list is ordered by timestamp in ascending order
+        latest_data = extra_feedJson[entry_instrument][-1]
+        latest_price = latest_data['ltp']
+        return latest_price
+    else:
+        return None
+
+def process_token_data(token):
+    df = resampled_data[token]    
+
+    if len(df) > ema_length:
+        # Extract the latest and previous EMA values
+        EMA_short_latest = df['EMA_short'].iloc[-2]
+        EMA_long_latest = df['EMA_long'].iloc[-2]
+        ALMA_latest = df['ALMA'].iloc[-2]
+        EMA_short_previous = df['EMA_short'].iloc[-3]
+        EMA_long_previous = df['EMA_long'].iloc[-3]       
+
+        timestamp = df.index[-1]
+        
+        current_position = current_positions.get(token)
+        action_taken = False
+
+        # First, check for exit signals
+        if current_position == 'long' and (EMA_short_latest < EMA_long_latest):
+            entry_instrument = entry_instruments.get(token, set.ce_trading_token)
+            price = get_latest_price(entry_instrument)
+            if price is not None:
+                log_trade(timestamp, token, "LONG_EXIT", price)
+                print(f"Long Exit Signal for {token} at {timestamp} at {pd.Timestamp.now()}")
+                current_positions[token] = None
+                action_taken = True
+
+        elif current_position == 'short' and (EMA_short_latest > EMA_long_latest):
+            entry_instrument = entry_instruments.get(token, set.pe_trading_token)
+            price = get_latest_price(entry_instrument)
+            if price is not None:
+                log_trade(timestamp, token, "SHORT_EXIT", price)
+                print(f"Short Exit Signal for {token} at {timestamp} at {pd.Timestamp.now()}")
+                current_positions[token] = None
+                action_taken = True
+
+        # Then, check for entry signals if we've just exited a position or if we're not in a position
+        if action_taken or current_positions.get(token) is None:
+            if (EMA_short_latest > EMA_long_latest >= ALMA_latest) and (EMA_short_previous <= EMA_long_previous):
+                entry_instrument = set.ce_trading_token
+                entry_instruments[token] = entry_instrument
+                price = get_latest_price(entry_instrument)
+                if price is not None:
+                    log_trade(timestamp, token, "LONG_ENTRY", price)
+                    print(f"Long Entry Signal for {token} at {timestamp} at {pd.Timestamp.now()}")
+                    current_positions[token] = 'long'
+
+            elif (EMA_short_latest < EMA_long_latest <= ALMA_latest) and (EMA_short_previous >= EMA_long_previous):
+                entry_instrument = set.pe_trading_token
+                entry_instruments[token] = entry_instrument
+                price = get_latest_price(entry_instrument)
+                if price is not None:
+                    log_trade(timestamp, token, "SHORT_ENTRY", price)
+                    print(f"Short Entry Signal for {token} at {timestamp} at {pd.Timestamp.now()}")
+                    current_positions[token] = 'short'
