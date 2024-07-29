@@ -1,87 +1,103 @@
-import threading
-import time
-import pandas as pd
+from collections import defaultdict
 
-# New dictionary to store entry prices
-entry_prices = {}
+# Store potential entry signals and their timestamps
+delayed_entries = defaultdict(lambda: {'timestamp': None, 'direction': None, 'price': None})
 
-def realtime_exit_checker(
-    current_positions,
-    entry_instruments,
-    profit_target,
-    stop_loss,
-    extra_feedJson
-):
-    def check_exits():
-        while True:
-            for token, position in current_positions.items():
-                if position is None:
-                    continue
+def delayed_entry_logic(token, df, current_positions, state, delayed_entries, delay_minutes=1):
+    """
+    Handles the delayed entry logic based on Chandelier Exit signals and retracement conditions.
+    
+    Parameters:
+    - token: The trading token.
+    - df: The DataFrame with resampled data.
+    - current_positions: A dictionary of current positions.
+    - state: The state object containing trading symbols and tokens.
+    - delayed_entries: A dictionary to keep track of delayed entry signals.
+    - delay_minutes: The delay in minutes before executing the trade.
+    """
+    timestamp = df.index[-1]
+    direction = df['ce_direction'].iloc[-1]
+    high = df['high'].iloc[-1]
+    low = df['low'].iloc[-1]
 
-                instrument_info = entry_instruments.get(token, {})
-                op_token = instrument_info.get('op_token')
-                op_symbol = instrument_info.get('op_symbol')
+    # Check if we should store a delayed entry signal
+    if current_positions.get(token) is None:
+        signal_bar_length = high - low
+        if direction == 1:  # Bullish signal
+            if signal_bar_length > 2 * (df['high'].iloc[-2] - df['low'].iloc[-2]):
+                delayed_entries[token] = {'timestamp': timestamp, 'direction': direction, 'price': low}
+        elif direction == -1:  # Bearish signal
+            if signal_bar_length > 2 * (df['high'].iloc[-2] - df['low'].iloc[-2]):
+                delayed_entries[token] = {'timestamp': timestamp, 'direction': direction, 'price': high}
 
-                if op_token is None or op_symbol is None:
-                    continue
+    # Execute delayed entry if the delay period has passed
+    if token in delayed_entries:
+        entry_info = delayed_entries[token]
+        if entry_info['timestamp'] is not None:
+            delay_threshold = timestamp - pd.Timedelta(minutes=delay_minutes)
+            if entry_info['timestamp'] <= delay_threshold:
+                if entry_info['direction'] == 1:
+                    entry_token = state.ce_trading_token
+                    entry_symbol = state.ce_trading_symbol
+                else:
+                    entry_token = state.pe_trading_token
+                    entry_symbol = state.pe_trading_symbol
 
-                current_price = get_latest_price(op_token)
-                if current_price is None:
-                    continue
+                price = get_latest_price(entry_token)
+                if price is not None:
+                    log_trade(timestamp, entry_symbol, "ENTRY", price, pd.Timestamp.now())
+                    current_positions[token] = 'long' if entry_info['direction'] == 1 else 'short'
+                    delayed_entries[token] = {'timestamp': None, 'direction': None, 'price': None}
 
-                # Get the entry price from our new dictionary
-                entry_price = entry_prices.get(op_symbol)
-                if entry_price is None:
-                    continue
 
-                if position == 'long':
-                    profit = current_price - entry_price
-                    if profit >= profit_target or profit <= -stop_loss:
-                        execute_exit(token, op_token, op_symbol, current_price, "REALTIME_LONG_EXIT")
-                elif position == 'short':
-                    profit = entry_price - current_price
-                    if profit >= profit_target or profit <= -stop_loss:
-                        execute_exit(token, op_token, op_symbol, current_price, "REALTIME_SHORT_EXIT")
 
-            time.sleep(0.1)  # Check every 100ms, adjust as needed
-
-    def execute_exit(token, op_token, op_symbol, price, exit_type):
-        timestamp = pd.Timestamp.now()
-        log_trade(timestamp, op_symbol, exit_type, price, timestamp)
-        print(f"{exit_type} for {op_symbol} at {timestamp} price: {price}")
-        current_positions[token] = None
-        entry_instruments.pop(token, None)
-        entry_prices.pop(op_symbol, None)  # Remove the entry price when exiting
-
-    exit_thread = threading.Thread(target=check_exits, daemon=True)
-    exit_thread.start()
-
-# Add this to your main code, after initializing necessary variables
-profit_target = 10  # Set your desired profit target
-stop_loss = 5  # Set your desired stop loss
-realtime_exit_checker(current_positions, entry_instruments, profit_target, stop_loss, extra_feedJson)
-
-# Modify your process_token_data function to include entry price logging
 def process_token_data(token):
-    # ... (your existing code)
+    df = resampled_data[token]
 
-    if action_taken or current_positions.get(token) is None:
-        if (EMA_short_latest > EMA_long_latest) and (EMA_short_previous <= EMA_long_previous) and df['is_bullish'].iloc[-1]:
-            # ... (your existing long entry code)
+    if len(df) > atr_length:  # Ensure enough data for Chandelier Exit calculation
+
+        # Extract Chandelier Exit values and direction
+        chandelier_exit_long = df['long_stop'].iloc[-1]
+        chandelier_exit_short = df['short_stop'].iloc[-1]
+        direction = df['ce_direction'].iloc[-1]
+        previous_chandelier_exit_long = df['long_stop'].iloc[-2]
+        previous_chandelier_exit_short = df['short_stop'].iloc[-2]
+        previous_direction = df['ce_direction'].iloc[-2]
+
+        timestamp = df.index[-1]
+        current_position = current_positions.get(token)
+        action_taken = False
+
+        # Check for exit signals based on Chandelier Exit
+        if current_position == 'long' and df['low'].iloc[-1] < chandelier_exit_long:
+            print(f"Long exit at {pd.Timestamp.now()}")
+            
+            op_token = entry_instruments.get(token, {}).get('op_token')
+            op_symbol = entry_instruments.get(token, {}).get('op_symbol')
+            
+            price = get_latest_price(op_token)
             if price is not None:
                 action_time = pd.Timestamp.now()
-                log_trade(timestamp, state.ce_trading_symbol, "LONG ENTRY", price, action_time)
-                print(f"Long Entry Signal for {state.ce_trading_symbol} at {timestamp} at {pd.Timestamp.now()} EMA_short_latest: {EMA_short_latest} EMA_long_latest: {EMA_long_latest} EMA_short_previous :{ EMA_short_previous} EMA_long_previous: {EMA_long_previous}")
-                current_positions[token] = 'long'
-                entry_prices[state.ce_trading_symbol] = price  # Store the entry price
+                log_trade(timestamp, op_symbol, "LONG_EXIT", price, action_time)
+                print(f"Long Exit Signal for {op_symbol} at {timestamp} at {pd.Timestamp.now()}")
+                current_positions[token] = None
+                entry_prices[op_symbol] = None  # Clear the entry price
+                action_taken = True
 
-        elif (EMA_short_latest < EMA_long_latest) and (EMA_short_previous >= EMA_long_previous) and df['is_bearish'].iloc[-1]:
-            # ... (your existing short entry code)
+        elif current_position == 'short' and df['high'].iloc[-1] > chandelier_exit_short:
+            print(f"Short exit at {pd.Timestamp.now()}")
+            
+            op_token = entry_instruments.get(token, {}).get('op_token')
+            op_symbol = entry_instruments.get(token, {}).get('op_symbol')
+            
+            price = get_latest_price(op_token)
             if price is not None:
                 action_time = pd.Timestamp.now()
-                log_trade(timestamp, state.pe_trading_symbol, "SHORT ENTRY", price, action_time)
-                print(f"Short Entry Signal for {state.pe_trading_symbol} at {timestamp} at {pd.Timestamp.now()} EMA_short_latest: {EMA_short_latest} EMA_long_latest: {EMA_long_latest} EMA_short_previous :{ EMA_short_previous} EMA_long_previous: {EMA_long_previous}")
-                current_positions[token] = 'short'
-                entry_prices[state.pe_trading_symbol] = price  # Store the entry price
+                log_trade(timestamp, op_symbol, "SHORT_EXIT", price, action_time)
+                print(f"Short Exit Signal for {op_symbol} at {timestamp} at {pd.Timestamp.now()}")
+                current_positions[token] = None
+                entry_prices[op_symbol] = None  # Clear the entry price
+                action_taken = True
 
-    # ... (rest of your existing code)
+        # Then, handle delayed entries if we've just exited a position or if we're not in a position
+        delayed_entry_logic(token, df, current_positions, state, delayed_entries, delay_minutes=1)
