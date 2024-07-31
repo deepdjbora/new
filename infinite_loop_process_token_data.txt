@@ -1,0 +1,135 @@
+import threading
+import time
+from functools import wraps
+
+# Global dictionary to store retracement monitoring threads
+retracement_threads = {}
+
+def watchdog(timeout):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            result = [TimeoutError('Function call timed out')]
+
+            def worker():
+                try:
+                    result[0] = func(*args, **kwargs)
+                except Exception as e:
+                    result[0] = e
+
+            thread = threading.Thread(target=worker)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout)
+
+            if isinstance(result[0], Exception):
+                raise result[0]
+            return result[0]
+
+        return wrapper
+    return decorator
+
+@watchdog(timeout=70)  # Set timeout to 70 seconds (slightly more than 1 minute)
+def process_token_data(token):
+    df = resampled_data[token]    
+
+    if len(df) > 5:  # Assuming minimum length for Chandelier Exit calculation
+        # Convert the necessary columns to numpy arrays
+        high = df['high'].values
+        low = df['low'].values
+        
+        # Calculate the average bar length of the last 10 bars
+        last_5_bars_length = calculate_last_5_bars_length(high, low)
+        current_bar_length = calculate_current_bar_length(high, low)
+        current_time = pd.Timestamp.now()
+
+        print(f"last 5 bar: {last_5_bars_length}")
+        print(f"current length: {current_bar_length}")
+        print(f"current time: {current_time}")
+
+        # Extract the latest and previous direction values
+        current_direction = df['ce_direction'].iloc[-1]
+        previous_direction = df['ce_direction'].iloc[-2]
+
+        timestamp = df.index[-1]
+        
+        current_position = current_positions.get(token)
+        action_taken = False
+
+        # First, check for exit signals
+        if current_position == 'long' and current_direction == -1 and previous_direction == 1:
+            # Long exit logic
+            # ...
+
+        elif current_position == 'short' and current_direction == 1 and previous_direction == -1:
+            # Short exit logic
+            # ...
+
+        # Then, check for entry signals
+        if action_taken or current_positions.get(token) is None:
+            if current_direction == 1 and previous_direction == -1 and current_bar_length < (last_5_bars_length * bar_length_multiplier):
+                # Long entry logic
+                # ...
+
+            elif current_direction == -1 and previous_direction == 1 and current_bar_length < (last_5_bars_length * bar_length_multiplier):
+                # Short entry logic
+                # ...
+
+            elif (current_direction == 1 and previous_direction == -1 and current_bar_length > (last_5_bars_length * bar_length_multiplier)) or \
+                 (current_direction == -1 and previous_direction == 1 and current_bar_length > (last_5_bars_length * bar_length_multiplier)):    
+                
+                retracement_prices = {}
+                signal_bar_high = high[-1]
+                signal_bar_low = low[-1]
+                retracement_prices[token] = calculate_retracement_price(signal_bar_high, signal_bar_low, current_direction)
+
+                # Start or update retracement monitoring
+                if token not in retracement_threads or not retracement_threads[token].is_alive():
+                    retracement_threads[token] = threading.Thread(
+                        target=monitor_retracement,
+                        args=(token, current_direction, retracement_prices[token])
+                    )
+                    retracement_threads[token].start()
+                else:
+                    # Update the existing thread with new data
+                    update_retracement_monitoring(token, current_direction, retracement_prices[token])
+
+    return  # Ensure the function always returns
+
+def monitor_retracement(token, initial_direction, retracement_price):
+    while True:
+        current_price = resampled_data[token]['close'].iloc[-1]
+        current_direction = resampled_data[token]['ce_direction'].iloc[-1]
+
+        retracement_condition = (
+            initial_direction == 1 and current_price <= retracement_price or
+            initial_direction == -1 and current_price >= retracement_price
+        )
+
+        if current_direction != initial_direction:
+            print(f"Direction changed for {token}, stopping monitoring.")
+            return
+
+        if retracement_condition:
+            print(f"Retracement condition met for {token}, entering trade.")
+            # Trade entry logic here...
+            return
+
+        time.sleep(1)  # Check every second
+
+def update_retracement_monitoring(token, new_direction, new_retracement_price):
+    # Logic to update the ongoing monitoring with new data
+    # This could involve using thread-safe variables or a queue to communicate with the monitoring thread
+    pass
+
+# Main loop
+while True:
+    try:
+        for token in tokens_to_monitor:
+            process_token_data(token)
+    except TimeoutError:
+        print(f"process_token_data for {token} timed out and was terminated.")
+    except Exception as e:
+        print(f"An error occurred in process_token_data for {token}: {str(e)}")
+    
+    time.sleep(60)  # Wait for 1 minute before the next iteration
