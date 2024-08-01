@@ -133,3 +133,186 @@ while True:
         print(f"An error occurred in process_token_data for {token}: {str(e)}")
     
     time.sleep(60)  # Wait for 1 minute before the next iteration
+
+
+
+    ##################################################################################################################
+
+import logging
+import time
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def process_token_data(token):
+    logging.debug(f"Starting process_token_data for token: {token}")
+    start_time = time.time()
+    
+    df = resampled_data[token]    
+    logging.debug(f"Resampled data length for {token}: {len(df)}")
+
+    if len(df) > 5:  # Assuming minimum length for Chandelier Exit calculation
+        logging.debug(f"Sufficient data for {token}, proceeding with calculations")
+
+        # Convert the necessary columns to numpy arrays
+        high = df['high'].values
+        low = df['low'].values
+        
+        # Calculate the average bar length of the last 10 bars
+        last_5_bars_length = calculate_last_5_bars_length(high, low)
+        current_bar_length = calculate_current_bar_length(high, low)
+        current_time = pd.Timestamp.now()
+
+        logging.debug(f"{token} - last 5 bar: {last_5_bars_length}")
+        logging.debug(f"{token} - current length: {current_bar_length}")
+        logging.debug(f"{token} - current time: {current_time}")
+
+        # Extract the latest and previous direction values
+        current_direction = df['ce_direction'].iloc[-1]
+        previous_direction = df['ce_direction'].iloc[-2]
+        logging.debug(f"{token} - current direction: {current_direction}, previous direction: {previous_direction}")
+
+        timestamp = df.index[-1]
+        logging.debug(f"{token} - timestamp: {timestamp}")
+        
+        current_position = current_positions.get(token)
+        logging.debug(f"{token} - current position: {current_position}")
+        action_taken = False
+
+        # First, check for exit signals
+        if current_position == 'long' and current_direction == -1 and previous_direction == 1:
+            logging.debug(f"{token} - Potential long exit signal detected")
+            # Long exit logic
+            op_token = entry_instruments.get(token, {}).get('op_token')
+            op_symbol = entry_instruments.get(token, {}).get('op_symbol')
+            
+            price = get_latest_price(op_token)
+            logging.debug(f"{token} - Latest price for long exit: {price}")
+            if price is not None:
+                action_time = pd.Timestamp.now()
+                log_trade(timestamp, op_symbol, "LONG_EXIT", price, action_time)
+                logging.info(f"Long Exit Signal for {op_symbol} at {action_time}")
+                current_positions[token] = None
+                action_taken = True
+            else:
+                logging.warning(f"{token} - Unable to get latest price for long exit")
+
+        elif current_position == 'short' and current_direction == 1 and previous_direction == -1:
+            logging.debug(f"{token} - Potential short exit signal detected")
+            # Short exit logic
+            op_token = entry_instruments.get(token, {}).get('op_token')
+            op_symbol = entry_instruments.get(token, {}).get('op_symbol')
+            
+            price = get_latest_price(op_token)
+            logging.debug(f"{token} - Latest price for short exit: {price}")
+            if price is not None:
+                action_time = pd.Timestamp.now()
+                log_trade(timestamp, op_symbol, "SHORT_EXIT", price, action_time)
+                logging.info(f"Short Exit Signal for {op_symbol} at {action_time}")
+                current_positions[token] = None
+                action_taken = True
+            else:
+                logging.warning(f"{token} - Unable to get latest price for short exit")
+
+        # Then, check for entry signals
+        if action_taken or current_positions.get(token) is None:
+            logging.debug(f"{token} - Checking for entry signals")
+            
+            if current_direction == 1 and previous_direction == -1 and current_bar_length < (last_5_bars_length * bar_length_multiplier):
+                logging.debug(f"{token} - Potential long entry signal detected")
+                # Long entry logic
+                signal_bar_high = high[-1]
+                signal_bar_low = low[-1]
+
+                entry_instruments[token] = {
+                    'op_token': state.ce_trading_token,
+                    'op_symbol': state.ce_trading_symbol
+                }
+
+                price = get_latest_price(state.ce_trading_token)
+                logging.debug(f"{token} - Latest price for long entry: {price}")
+                
+                if price is not None:
+                    action_time = pd.Timestamp.now()
+                    log_trade(timestamp, state.ce_trading_symbol, "LONG ENTRY", price, action_time)
+                    logging.info(f"Long Entry Signal for {state.ce_trading_symbol} at {action_time}")
+                    current_positions[token] = 'long'
+                    entry_prices[state.ce_trading_symbol] = price
+                else:
+                    logging.warning(f"{token} - Unable to get latest price for long entry")
+
+            elif current_direction == -1 and previous_direction == 1 and current_bar_length < (last_5_bars_length * bar_length_multiplier):
+                logging.debug(f"{token} - Potential short entry signal detected")
+                # Short entry logic
+                signal_bar_high = high[-1]
+                signal_bar_low = low[-1]
+                
+                entry_instruments[token] = {
+                    'op_token': state.pe_trading_token,
+                    'op_symbol': state.pe_trading_symbol
+                }
+
+                price = get_latest_price(state.pe_trading_token)
+                logging.debug(f"{token} - Latest price for short entry: {price}")
+
+                if price is not None:
+                    action_time = pd.Timestamp.now()
+                    log_trade(timestamp, state.pe_trading_symbol, "SHORT ENTRY", price, action_time)
+                    logging.info(f"Short Entry Signal for {state.pe_trading_symbol} at {action_time}")
+                    current_positions[token] = 'short'
+                    entry_prices[state.pe_trading_symbol] = price
+                else:
+                    logging.warning(f"{token} - Unable to get latest price for short entry")
+
+            elif (current_direction == 1 and previous_direction == -1 and current_bar_length > (last_5_bars_length * bar_length_multiplier)) or \
+                 (current_direction == -1 and previous_direction == 1 and current_bar_length > (last_5_bars_length * bar_length_multiplier)):    
+                logging.debug(f"{token} - Potential retracement scenario detected")
+                retracement_prices = {}
+                signal_bar_high = high[-1]
+                signal_bar_low = low[-1]
+                retracement_prices[token] = calculate_retracement_price(signal_bar_high, signal_bar_low, current_direction)
+                logging.debug(f"{token} - Calculated retracement price: {retracement_prices[token]}")
+
+                def monitor_retracement():
+                    logging.debug(f"{token} - Starting retracement monitoring")
+                    initial_direction = current_direction  # Capture the direction at the time of signal
+                    retracement_price = retracement_prices[token]
+                    monitor_start_time = time.time()
+
+                    while True:
+                        # Fetch the latest price
+                        current_price = resampled_data[token]['close'].iloc[-1]
+                        logging.debug(f"{token} - Retracement monitoring: current price {current_price}, target price {retracement_price}")
+
+                        # Check if price has retraced to the calculated retracement price
+                        retracement_condition = (
+                            initial_direction == 1 and current_price <= retracement_price or
+                            initial_direction == -1 and current_price >= retracement_price
+                        )
+
+                        # Check for direction change
+                        if current_direction != initial_direction:
+                            logging.debug(f"{token} - Direction changed, stopping retracement monitoring.")
+                            break
+
+                        if retracement_condition:
+                            logging.debug(f"{token} - Retracement condition met, entering trade.")
+                            # Trade entry logic here...
+                            break
+
+                        time.sleep(0.1)  # Adjust sleep time as needed
+                        
+                        # Log every 10 seconds to show it's still running
+                        if int(time.time() - monitor_start_time) % 10 == 0:
+                            logging.debug(f"{token} - Retracement monitoring still active after {int(time.time() - monitor_start_time)} seconds")
+
+                # Start the monitoring function in a separate thread
+                logging.debug(f"{token} - Starting retracement monitoring thread")
+                monitoring_thread = threading.Thread(target=monitor_retracement)
+                monitoring_thread.start()
+
+    else:
+        logging.debug(f"Insufficient data for {token}, skipping calculations")
+
+    execution_time = time.time() - start_time
+    logging.debug(f"Finished process_token_data for token: {token}. Execution time: {execution_time:.2f} seconds")
+    return  # Ensure the function always returns
