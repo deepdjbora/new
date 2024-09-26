@@ -24,11 +24,13 @@ def download_and_process_file(url, output_csv):
 
 # URLs and output files
 urls_and_files = [
-    ("https://api.shoonya.com/MCX_symbols.txt.zip", "/home/deep/Desktop/NEWshoonya/MCX_symbols.csv"),
-    ("https://api.shoonya.com/NFO_symbols.txt.zip", "/home/deep/Desktop/NEWshoonya/NFO_symbols.csv"),
-    ("https://api.shoonya.com/BFO_symbols.txt.zip", "/home/deep/Desktop/NEWshoonya/BFO_symbols.csv")
+    ("https://api.shoonya.com/MCX_symbols.txt.zip", "/home/wasptdr/Desktop/new-main/MCX_symbols.csv"),
+    ("https://api.shoonya.com/NFO_symbols.txt.zip", "/home/wasptdr/Desktop/new-main/NFO_symbols.csv"),
+    ("https://api.shoonya.com/BFO_symbols.txt.zip", "/home/wasptdr/Desktop/new-main/BFO_symbols.csv")
     
 ]
+
+
 
 for url, output_csv in urls_and_files:
     download_and_process_file(url, output_csv)
