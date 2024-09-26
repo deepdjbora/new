@@ -1,0 +1,26 @@
+.dashboard-container {
+  padding: 20px;
+  background-color: #121212;
+  color: #fff;
+}
+
+.actions button {
+  padding: 10px;
+  margin: 5px;
+  background: linear-gradient(to right, #4facfe 0%, #00f2fe 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+table {
+  width: 100%;
+  margin-top: 20px;
+  border-collapse: collapse;
+}
+
+table th, table td {
+  padding: 10px;
+  border: 1px solid #555;
+}
