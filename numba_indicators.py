@@ -166,7 +166,7 @@ def chandelier_exit_numba(open, high, low, close, length=2, mult=1):
 
 
 @njit
-def supertrend_numba(high, low, close, length, multiplier):
+def supertrend_numba(high, low, close, length= 3, multiplier =2):
     atr = atr_numba(high, low, close, length)
 
     hl2 = (high + low) / 2  # Calculate hl2
