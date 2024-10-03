@@ -198,40 +198,6 @@ class DataProcessor:
         self.last_processed_time = {}
         self.IDLE_THRESHOLD = timedelta(minutes=1)  # Adjust this as needed
 
-    # async def ohlc_resampling(self):
-    #     async with self.tick_collector.processing_lock:
-    #         for token, ticks in self.tick_collector.ring_buffers.items():
-    #             if not ticks:
-    #                 self.logger.info(f"No ticks available for {token}")
-    #                 continue
-                
-    #             # Create DataFrame from ticks
-    #             df = pd.DataFrame(list(ticks))
-    #             df['tt'] = pd.to_datetime(df['tt'])
-    #             df.set_index('tt', inplace=True)
-                
-    #             #self.logger.info(f"Processing ticks for token {token}. Tick count: {len(df)}")
-
-    #             # Iterate over each timeframe for OHLC resampling
-    #             for timeframe in self.tick_collector.VALID_TIMEFRAMES:
-    #                 if self.tick_collector.resampling_enabled[token].get(timeframe, False):
-    #                     #self.logger.info(f"Resampling for token {token} at timeframe {timeframe}")
-
-    #                     resampled = df['ltp'].resample(timeframe).ohlc()
-                        
-    #                     # Only update if we have valid resampled data
-    #                     if not resampled.empty:
-    #                         # Convert resampled data to dict and store in the resampled_buffers
-    #                         resampled_records = resampled.reset_index().to_dict('records')
-    #                         self.tick_collector.resampled_buffers[token][timeframe] = deque(
-    #                             resampled_records,
-    #                             maxlen=self.tick_collector.RING_BUFFER_RESAMPLE_SIZE
-    #                         )
-    #                         #self.logger.info(f"Updated resampled buffer for token {token} at timeframe {timeframe}. Resampled count: {len(resampled_records)}")
-    #                     else:
-    #                         self.logger.info(f"No resampled data for token {token} at timeframe {timeframe}")
-    #                 else:
-    #                     self.logger.info(f"Resampling not enabled for {token} at {timeframe}")
     async def ohlc_resampling(self):
         async with self.tick_collector.processing_lock:
             current_time = datetime.now()
