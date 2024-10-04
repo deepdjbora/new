@@ -5,8 +5,13 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pyotp
 from NorenRestApiPy.NorenApi import NorenApi
+import numba_indicators
+import nest_asyncio
+# Global variable to store the DataProcessor instance
+global_data_processor = None
+global_candle_end_finder = None
 
-class TickCollector:
+class tick_collector:
     def __init__(self, credentials_file="usercred.xlsx"):
         self.processing_lock = asyncio.Lock()
         self.api = None
@@ -18,7 +23,7 @@ class TickCollector:
         self.active_subscriptions = set()
         self.RING_BUFFER_SIZE = 1000
         self.RING_BUFFER_RESAMPLE_SIZE = 1000
-        self.VALID_TIMEFRAMES = ['1min', '5min']
+        self.VALID_TIMEFRAMES = ['5s', '15s', '1min']
         
         self.logger = self._setup_logger()
         self._initialize_api(credentials_file)
@@ -78,6 +83,7 @@ class TickCollector:
     async def set_resampling(self, token, timeframe, enable):
         if token in self.resampling_enabled and timeframe in self.resampling_enabled[token]:
             self.resampling_enabled[token][timeframe] = enable
+            #print("resampling enabled or not", self.resampling_enabled)  #############################################
             self.logger.info(f"Resampling {'enabled' if enable else 'disabled'} for token {token} and timeframe {timeframe}")
         else:
             self.logger.warning(f"Token {token} or timeframe {timeframe} not found in resampling_enabled")
@@ -104,7 +110,6 @@ class TickCollector:
         max_retry_delay = 32
         max_retries = 10
         retries = 0
-
         while retries < max_retries:
             try:
                 self.api.start_websocket(
@@ -196,13 +201,13 @@ class DataProcessor:
         self.tick_collector = tick_collector
         self.logger = logging.getLogger(__name__)
         self.last_processed_time = {}
-        self.IDLE_THRESHOLD = timedelta(minutes=1)  # Adjust this as needed
-
+        self.IDLE_THRESHOLD = timedelta(minutes=1)
+             
     async def ohlc_resampling(self):
         async with self.tick_collector.processing_lock:
             current_time = datetime.now()
             for token, ticks in self.tick_collector.ring_buffers.items():
-                last_tick_time = self.tick_collector.last_tick_time.get(token)
+                last_tick_time = self.tick_collector.last_tick_time.get(token) 
                 
                 if last_tick_time is None:
                     self.logger.info(f"No last tick time available for {token}")
@@ -230,13 +235,26 @@ class DataProcessor:
                             resampled = df['ltp'].resample(timeframe).ohlc().dropna()
                             
                             if not resampled.empty:
+                                # Calculate indicators using resampled OHLC data
+                                high = resampled['high'].values
+                                low = resampled['low'].values
+                                close = resampled['close'].values
+                                
+                                # Call your indicator functions (assumed to be imported)
+                                supertrend, supertrend_direction = numba_indicators.supertrend_numba(high, low, close)
+                                jma, jma_direction = numba_indicators.jma_numba_direction(close)
+                                
+                                # Combine the calculated indicators into the resampled dataframe
+                                resampled['supertrend'] = supertrend
+                                resampled['supertrend_direction'] = supertrend_direction
+                                resampled['jma_direction'] = jma_direction
+                                
                                 # Merge with existing data without filling gaps
                                 existing_data = self.tick_collector.resampled_buffers[token].get(timeframe, deque())
                                 existing_df = pd.DataFrame(list(existing_data)).set_index('tt') if existing_data else pd.DataFrame()
                                 
-                                if not existing_df.empty:
-                                    # Remove any overlapping data
-                                    existing_df = existing_df[existing_df.index < resampled.index[0]]
+                                if not existing_df.empty:                                   
+                                    existing_df = existing_df[existing_df.index < resampled.index[0]]                                
                                 
                                 # Concatenate existing data with new data
                                 combined_df = pd.concat([existing_df, resampled])
@@ -246,23 +264,24 @@ class DataProcessor:
                                 self.tick_collector.resampled_buffers[token][timeframe] = deque(
                                     resampled_records,
                                     maxlen=self.tick_collector.RING_BUFFER_RESAMPLE_SIZE
-                                )
+                                )                                
                                 
-                                self.last_processed_time[(token, timeframe)] = current_time
-                                self.logger.info(f"Updated resampled buffer for {token} at {timeframe}. Resampled count: {len(resampled_records)}")
+                                # Update last_processed_time with the timestamp of the last processed data point
+                                self.last_processed_time[(token, timeframe)] = resampled.index[-1].to_pydatetime()
+                                
+                                #self.logger.info(f"Updated resampled buffer for {token} at {timeframe}. Resampled count: {len(resampled_records)}")
                             else:
                                 self.logger.info(f"No resampled data for {token} at {timeframe}")
                         else:
                             self.logger.info(f"No new data for {token} at {timeframe} since last processing.")
                             
-    async def process_data(self):
-        #self.logger.info("DataProcessor: process_data method started")
-        while True:
-            #self.logger.info("DataProcessor: Starting OHLC resampling process...")
+    async def process_data(self):        
+        while True:          
+              
             await self.ohlc_resampling()
             await asyncio.sleep(1)  # Adjust the sleep time as needed
 
-    def get_resampled_buffer_contents(self, token=None, timeframe=None):
+    async def get_resampled_buffer_contents(self, token=None, timeframe=None):
     
         if token is None and timeframe is None:
             return {t: {tf: list(b) for tf, b in buffers.items()} 
@@ -279,27 +298,115 @@ class DataProcessor:
         await asyncio.gather(
             self.process_data()            
         )
-        
-import nest_asyncio
-# Global variable to store the DataProcessor instance
-global_data_processor = None
+
+class CandleEndFinder:
+    def __init__(self, DataProcessor):
+        self.data_processor = DataProcessor
+        self.logger = logging.getLogger(__name__)
+        self.completed_candles_dfs = {}
+        self.last_processed_candle = {}
+
+    async def run(self):
+        while True:
+            try:
+                await self.find_completed_candles()
+                await asyncio.sleep(1)  # Adjust as needed
+            except Exception as e:
+                self.logger.error(f"Error in CandleEndFinder run loop: {e}")
+                await asyncio.sleep(5)  # Wait a bit longer before retrying after an error
+
+    async def find_completed_candles(self):
+        current_time = pd.Timestamp.now()
+        async with self.data_processor.tick_collector.processing_lock:
+            for token, timeframes in self.data_processor.tick_collector.resampled_buffers.items():
+                for timeframe, resampled_data in timeframes.items():
+                    if not self.data_processor.tick_collector.resampling_enabled[token].get(timeframe, False):
+                        continue
+
+                    if not resampled_data:
+                        self.logger.debug(f"No resampled data for token {token} and timeframe {timeframe}")
+                        continue
+
+                    try:
+                        df = pd.DataFrame(list(resampled_data))
+                        self.logger.debug(f"Resampled data for {token} {timeframe}: {df.head().to_dict()}")
+                        
+                        # The 'tt' is already a Timestamp object, so we don't need to convert it
+                        df.set_index('tt', inplace=True)
+                        
+                        # Calculate the end of the current candle period
+                        freq = pd.Timedelta(timeframe)
+                        time_bucket_start = current_time.floor(freq)
+                        current_candle_end = time_bucket_start + freq
+
+                        # Find the last completed candle
+                        if len(df) <= 1:
+                            self.logger.debug(f"Not enough data for {token} {timeframe}")
+                            continue
+                        
+                        completed_candles = df[df.index < time_bucket_start]
+
+                        if not completed_candles.empty:
+                            last_completed_candle = completed_candles.iloc[-1].to_dict()
+                            # Add the index (timestamp) back to the dictionary
+                            last_completed_candle['tt'] = completed_candles.index[-1].isoformat()
+
+                            if token not in self.completed_candles_dfs:
+                                self.completed_candles_dfs[token] = {}
+                            if timeframe not in self.completed_candles_dfs[token]:
+                                self.completed_candles_dfs[token][timeframe] = deque(maxlen=self.data_processor.tick_collector.RING_BUFFER_RESAMPLE_SIZE)
+
+                            # Only append if it's a new candle
+                            if (token not in self.last_processed_candle or
+                                timeframe not in self.last_processed_candle[token] or
+                                self.last_processed_candle[token][timeframe] < last_completed_candle['tt']):
+                                
+                                self.completed_candles_dfs[token][timeframe].append(last_completed_candle)
+                                self.last_processed_candle.setdefault(token, {})[timeframe] = last_completed_candle['tt']
+                                self.logger.info(f"Added completed candle for token {token} and timeframe {timeframe}")
+                        else:
+                            self.logger.debug(f"No completed candles for token {token} and timeframe {timeframe}")
+
+                    except Exception as e:
+                        self.logger.error(f"Error processing token {token} and timeframe {timeframe}: {str(e)}")
+                        self.logger.error(f"Resampled data: {resampled_data}")
+                        import traceback
+                        self.logger.error(f"Traceback: {traceback.format_exc()}")
+
+    async def get_completed_candles(self, token=None, timeframe=None):
+        if token is None and timeframe is None:
+            return {t: {tf: list(d) for tf, d in timeframes.items()} 
+                    for t, timeframes in self.completed_candles_dfs.items()}
+        elif token is not None and timeframe is None:
+            return {tf: list(d) for tf, d in self.completed_candles_dfs.get(token, {}).items()}
+        elif token is not None and timeframe is not None:
+            return list(self.completed_candles_dfs.get(token, {}).get(timeframe, deque()))
+        else:  # token is None and timeframe is not None
+            return {t: list(timeframes.get(timeframe, deque())) 
+                    for t, timeframes in self.completed_candles_dfs.items() if timeframe in timeframes}
 
 async def main():
     global global_data_processor
-    collector = TickCollector()
+    global global_candle_end_finder
+    collector = tick_collector()
     processor = DataProcessor(collector)
+    candle_finder = CandleEndFinder(processor)
+    
     global_data_processor = processor
+    global_candle_end_finder = candle_finder
     
-    await asyncio.gather(collector.run(), processor.run())
+    await asyncio.gather(collector.run(), processor.run(), candle_finder.run())
 
-    
-if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.set_debug(True)
+loop = asyncio.get_event_loop()
+loop.set_debug(True)
+if loop.is_running():
+    nest_asyncio.apply()
+asyncio.create_task(main())
+if not loop.is_running():
     try:
-        loop.run_until_complete(main())
+        loop.run_forever()
     except KeyboardInterrupt:
-        print("Received exit signal. Cleaning up...")
+        logger.info("Received exit signal. Cleaning up...")
     finally:
         loop.close()
-        print("Event loop closed. Exiting.")
+        logger.info("Event loop closed. Exiting.")
