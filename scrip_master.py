@@ -24,9 +24,9 @@ def download_and_process_file(url, output_csv):
 
 # URLs and output files
 urls_and_files = [
-    ("https://api.shoonya.com/MCX_symbols.txt.zip", "/home/wasptdr/Desktop/new-main/MCX_symbols.csv"),
-    ("https://api.shoonya.com/NFO_symbols.txt.zip", "/home/wasptdr/Desktop/new-main/NFO_symbols.csv"),
-    ("https://api.shoonya.com/BFO_symbols.txt.zip", "/home/wasptdr/Desktop/new-main/BFO_symbols.csv")
+    ("https://api.shoonya.com/MCX_symbols.txt.zip", "/home/wasptdr/Desktop/new-main/new/MCX_symbols.csv"),
+    ("https://api.shoonya.com/NFO_symbols.txt.zip", "/home/wasptdr/Desktop/new-main/new/NFO_symbols.csv"),
+    ("https://api.shoonya.com/BFO_symbols.txt.zip", "/home/wasptdr/Desktop/new-main/new/BFO_symbols.csv")
     
 ]
 

@@ -89,7 +89,7 @@ mplfinance==0.12.10b0
 nbformat==5.10.4
 nest-asyncio==1.6.0
 networkx==3.2.1
-NorenRestApi @ file:///home/wasptdr/Desktop/new-main/noren_file/NorenRestApi-0.0.30-py2.py3-none-any.whl
+NorenRestApi @ file:///home/bitsbytes2algoz/Desktop/new-main/new/noren_file/NorenRestApi-0.0.30-py2.py3-none-any.whl
 numba==0.60.0
 numpy==1.26.4
 oauthlib==3.2.2
