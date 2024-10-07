@@ -23,7 +23,7 @@ class tick_collector:
         self.active_subscriptions = set()
         self.RING_BUFFER_SIZE = 1000
         self.RING_BUFFER_RESAMPLE_SIZE = 1000
-        self.VALID_TIMEFRAMES = ['5s', '15s', '1min']
+        self.VALID_TIMEFRAMES = ['15s', '1min']
         
         self.logger = self._setup_logger()
         self._initialize_api(credentials_file)
@@ -83,7 +83,6 @@ class tick_collector:
     async def set_resampling(self, token, timeframe, enable):
         if token in self.resampling_enabled and timeframe in self.resampling_enabled[token]:
             self.resampling_enabled[token][timeframe] = enable
-            #print("resampling enabled or not", self.resampling_enabled)  #############################################
             self.logger.info(f"Resampling {'enabled' if enable else 'disabled'} for token {token} and timeframe {timeframe}")
         else:
             self.logger.warning(f"Token {token} or timeframe {timeframe} not found in resampling_enabled")
@@ -98,7 +97,6 @@ class tick_collector:
                     new_tick = {'tt': timest, 'ltp': float(tick_data['lp'])}
                     self.ring_buffers[token].append(new_tick)
                     self.last_tick_time[token] = datetime.fromisoformat(timest)
-                    #self.logger.info(f"Added tick to buffer for token {token}. Ring_Buffer: {self.ring_buffers[token]}")
                 else:
                     self.logger.warning(f"Token {token} not found in ring buffers. Ignoring tick.")
         except (KeyError, ValueError) as e:
@@ -121,9 +119,9 @@ class tick_collector:
                 await self.wait_for_feed_open(timeout=30)
                 self.logger.info("WebSocket connected successfully.")
                 
-                await self.manage_subscriptions('add', 'MCX|432294')
-                #await self.manage_subscriptions('add', 'NSE|26009')
-                # await self.manage_subscriptions('add', 'NSE|26000')
+                #await self.manage_subscriptions('add', 'MCX|432294')
+                await self.manage_subscriptions('add', 'NSE|26009')
+                await self.manage_subscriptions('add', 'NSE|26000')
                 
                 retry_delay = 1
                 retries = 0
@@ -266,10 +264,8 @@ class DataProcessor:
                                     maxlen=self.tick_collector.RING_BUFFER_RESAMPLE_SIZE
                                 )                                
                                 
-                                # Update last_processed_time with the timestamp of the last processed data point
                                 self.last_processed_time[(token, timeframe)] = resampled.index[-1].to_pydatetime()
                                 
-                                #self.logger.info(f"Updated resampled buffer for {token} at {timeframe}. Resampled count: {len(resampled_records)}")
                             else:
                                 self.logger.info(f"No resampled data for {token} at {timeframe}")
                         else:
@@ -338,7 +334,6 @@ class CandleEndFinder:
                         freq = pd.Timedelta(timeframe)
                         time_bucket_start = current_time.floor(freq)
                         current_candle_end = time_bucket_start + freq
-
                         # Find the last completed candle
                         if len(df) <= 1:
                             self.logger.debug(f"Not enough data for {token} {timeframe}")
@@ -362,8 +357,7 @@ class CandleEndFinder:
                                 self.last_processed_candle[token][timeframe] < last_completed_candle['tt']):
                                 
                                 self.completed_candles_dfs[token][timeframe].append(last_completed_candle)
-                                self.last_processed_candle.setdefault(token, {})[timeframe] = last_completed_candle['tt']
-                                self.logger.info(f"Added completed candle for token {token} and timeframe {timeframe}")
+                                self.last_processed_candle.setdefault(token, {})[timeframe] = last_completed_candle['tt']                                
                         else:
                             self.logger.debug(f"No completed candles for token {token} and timeframe {timeframe}")
 
