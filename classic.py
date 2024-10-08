@@ -11,7 +11,7 @@ import nest_asyncio
 global_data_processor = None
 global_candle_end_finder = None
 
-class tick_collector:
+class TickCollector:
     def __init__(self, credentials_file="usercred.xlsx"):
         self.processing_lock = asyncio.Lock()
         self.api = None
@@ -23,7 +23,7 @@ class tick_collector:
         self.active_subscriptions = set()
         self.RING_BUFFER_SIZE = 1000
         self.RING_BUFFER_RESAMPLE_SIZE = 1000
-        self.VALID_TIMEFRAMES = ['15s', '1min']
+        self.VALID_TIMEFRAMES = ['5s', '15s']
         
         self.logger = self._setup_logger()
         self._initialize_api(credentials_file)
@@ -119,9 +119,9 @@ class tick_collector:
                 await self.wait_for_feed_open(timeout=30)
                 self.logger.info("WebSocket connected successfully.")
                 
-                #await self.manage_subscriptions('add', 'MCX|432294')
-                await self.manage_subscriptions('add', 'NSE|26009')
-                await self.manage_subscriptions('add', 'NSE|26000')
+                await self.manage_subscriptions('add', 'MCX|432294')
+                # await self.manage_subscriptions('add', 'NSE|26009')
+                # await self.manage_subscriptions('add', 'NSE|26000')
                 
                 retry_delay = 1
                 retries = 0
@@ -195,81 +195,87 @@ class tick_collector:
         )
 
 class DataProcessor:
-    def __init__(self, tick_collector):
+    def __init__(self, tick_collector: TickCollector):
         self.tick_collector = tick_collector
         self.logger = logging.getLogger(__name__)
         self.last_processed_time = {}
         self.IDLE_THRESHOLD = timedelta(minutes=1)
+        #self.buffer_locks = {token: asyncio.Lock() for token in tick_collector.ring_buffers}
+
              
     async def ohlc_resampling(self):
         async with self.tick_collector.processing_lock:
             current_time = datetime.now()
             for token, ticks in self.tick_collector.ring_buffers.items():
-                last_tick_time = self.tick_collector.last_tick_time.get(token) 
-                
-                if last_tick_time is None:
-                    self.logger.info(f"No last tick time available for {token}")
-                    continue
-                
-                time_since_last_tick = current_time - last_tick_time
-                
-                if time_since_last_tick > self.IDLE_THRESHOLD:
-                    self.logger.info(f"Token {token} idle for {time_since_last_tick}. Will process on next tick.")
-                    continue
-                
-                if not ticks:
-                    self.logger.info(f"No ticks available for {token}")
-                    continue
-                
-                df = pd.DataFrame(list(ticks))
-                df['tt'] = pd.to_datetime(df['tt'])
-                df.set_index('tt', inplace=True)
-                
-                for timeframe in self.tick_collector.VALID_TIMEFRAMES:
-                    if self.tick_collector.resampling_enabled[token].get(timeframe, False):
-                        last_processed = self.last_processed_time.get((token, timeframe))
-                        
-                        if last_processed is None or last_tick_time > last_processed:
-                            resampled = df['ltp'].resample(timeframe).ohlc().dropna()
+                try:                    
+                    last_tick_time = self.tick_collector.last_tick_time.get(token)                    
+                    if last_tick_time is None:
+                        self.logger.info(f"No last tick time available for {token}")
+                        continue
+                    
+                    time_since_last_tick = current_time - last_tick_time
+                    
+                    if time_since_last_tick > self.IDLE_THRESHOLD:
+                        self.logger.info(f"Token {token} idle for {time_since_last_tick}. Will process on next tick.")
+                        continue
+                    
+                    if not ticks:
+                        self.logger.info(f"No ticks available for {token}")
+                        continue
+                    
+                    df = pd.DataFrame(list(ticks))
+                    df['tt'] = pd.to_datetime(df['tt'])
+                    df.set_index('tt', inplace=True)
+                    
+                    for timeframe in self.tick_collector.VALID_TIMEFRAMES:
+                        if self.tick_collector.resampling_enabled[token].get(timeframe, False):
+                            last_processed = self.last_processed_time.get((token, timeframe))
                             
-                            if not resampled.empty:
-                                # Calculate indicators using resampled OHLC data
-                                high = resampled['high'].values
-                                low = resampled['low'].values
-                                close = resampled['close'].values
+                            if last_processed is None or last_tick_time > last_processed:
+                                resampled = df['ltp'].resample(timeframe).ohlc().dropna()
                                 
-                                # Call your indicator functions (assumed to be imported)
-                                supertrend, supertrend_direction = numba_indicators.supertrend_numba(high, low, close)
-                                jma, jma_direction = numba_indicators.jma_numba_direction(close)
-                                
-                                # Combine the calculated indicators into the resampled dataframe
-                                resampled['supertrend'] = supertrend
-                                resampled['supertrend_direction'] = supertrend_direction
-                                resampled['jma_direction'] = jma_direction
-                                
-                                # Merge with existing data without filling gaps
-                                existing_data = self.tick_collector.resampled_buffers[token].get(timeframe, deque())
-                                existing_df = pd.DataFrame(list(existing_data)).set_index('tt') if existing_data else pd.DataFrame()
-                                
-                                if not existing_df.empty:                                   
-                                    existing_df = existing_df[existing_df.index < resampled.index[0]]                                
-                                
-                                # Concatenate existing data with new data
-                                combined_df = pd.concat([existing_df, resampled])
-                                
-                                # Convert back to records and update the buffer
-                                resampled_records = combined_df.reset_index().to_dict('records')
-                                self.tick_collector.resampled_buffers[token][timeframe] = deque(
-                                    resampled_records,
-                                    maxlen=self.tick_collector.RING_BUFFER_RESAMPLE_SIZE
-                                )                                
-                                
-                                self.last_processed_time[(token, timeframe)] = resampled.index[-1].to_pydatetime()
-                                
+                                if not resampled.empty:
+                                    # Calculate indicators using resampled OHLC data
+                                    high = resampled['high'].values
+                                    low = resampled['low'].values
+                                    close = resampled['close'].values
+                                    
+                                    # Call your indicator functions (assumed to be imported)
+                                    supertrend, supertrend_direction = numba_indicators.supertrend_numba(high, low, close)
+                                    jma, jma_direction = numba_indicators.jma_numba_direction(close)
+                                    
+                                    # Combine the calculated indicators into the resampled dataframe
+                                    resampled['supertrend'] = supertrend
+                                    resampled['supertrend_direction'] = supertrend_direction
+                                    resampled['jma_direction'] = jma_direction
+                                    
+                                    # Merge with existing data without filling gaps
+                                    existing_data = self.tick_collector.resampled_buffers[token].get(timeframe, deque())
+                                    existing_df = pd.DataFrame(list(existing_data)).set_index('tt') if existing_data else pd.DataFrame()
+                                    
+                                    if not existing_df.empty:                                   
+                                        existing_df = existing_df[existing_df.index < resampled.index[0]]                                
+                                    
+                                    # Concatenate existing data with new data
+                                    combined_df = pd.concat([existing_df, resampled])
+                                    
+                                    # Convert back to records and update the buffer
+                                    resampled_records = combined_df.reset_index().to_dict('records')
+                                    self.tick_collector.resampled_buffers[token][timeframe] = deque(
+                                        resampled_records,
+                                        maxlen=self.tick_collector.RING_BUFFER_RESAMPLE_SIZE
+                                    )                                
+                                    
+                                    self.last_processed_time[(token, timeframe)] = resampled.index[-1].to_pydatetime()
+                                    
+                                else:
+                                    self.logger.info(f"No resampled data for {token} at {timeframe}")
                             else:
-                                self.logger.info(f"No resampled data for {token} at {timeframe}")
-                        else:
-                            self.logger.info(f"No new data for {token} at {timeframe} since last processing.")
+                                self.logger.info(f"No new data for {token} at {timeframe} since last processing.")
+
+                except Exception as e:
+                    self.logger.error(f"Error processing token {token}: {str(e)}")
+                    continue  # Move to the next token instead of crashing      
                             
     async def process_data(self):        
         while True:          
@@ -296,8 +302,8 @@ class DataProcessor:
         )
 
 class CandleEndFinder:
-    def __init__(self, DataProcessor):
-        self.data_processor = DataProcessor
+    def __init__(self, data_processor: DataProcessor):
+        self.data_processor = data_processor
         self.logger = logging.getLogger(__name__)
         self.completed_candles_dfs = {}
         self.last_processed_candle = {}
@@ -382,7 +388,7 @@ class CandleEndFinder:
 async def main():
     global global_data_processor
     global global_candle_end_finder
-    collector = tick_collector()
+    collector = TickCollector()
     processor = DataProcessor(collector)
     candle_finder = CandleEndFinder(processor)
     
