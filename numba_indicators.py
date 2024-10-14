@@ -202,6 +202,49 @@ def supertrend_numba(high, low, close, length= 3, multiplier =2):
 
     return supertrend, trend
 
+@njit
+def jma_numba_direction(src, length = 5, phase = 50, power= 1):
+    out = np.full_like(src, np.nan)
+    direction = np.zeros_like(src)  # Array to hold direction values
+    
+    if len(src) <= length:
+        return out, direction
+    
+    phaseRatio = 1.5 + phase / 100 if -100 <= phase <= 100 else (0.5 if phase < -100 else 2.5)
+    beta = 0.45 * (length - 1) / (0.45 * (length - 1) + 2)
+    alpha = np.power(beta, power)
+    
+    e0 = e1 = e2 = jma = 0.0
+    
+    for i in range(len(src)):
+        if i == 0:
+            e0 = src[i]
+            e1 = 0.0
+            e2 = 0.0
+            jma = 0.0
+        else:
+            e0 = (1 - alpha) * src[i] + alpha * e0
+            e1 = (src[i] - e0) * (1 - beta) + beta * e1
+            e2 = (e0 + phaseRatio * e1 - jma) * np.power(1 - alpha, 2) + np.power(alpha, 2) * e2
+            jma = e2 + jma
+            
+            # Reset values if they become too large or unstable
+            if np.abs(jma) > 1e10:
+                e0 = e1 = e2 = jma = 0.0
+        
+        if i >= length - 1:
+            out[i] = np.round(jma, 2)
+            
+            # Determine direction: 1 for uptrend, -1 for downtrend, 0 if no change
+            if i > length:
+                if out[i] > out[i-1]:
+                    direction[i] = 1
+                elif out[i] < out[i-1]:
+                    direction[i] = -1
+                else:
+                    direction[i] = direction[i-1]
+    
+    return out, direction
 
 @njit
 def check_significant_candle(high, low, length=5, threshold=2):
